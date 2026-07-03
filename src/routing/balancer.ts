@@ -1,6 +1,7 @@
-import type { PendingRequest, InferenceResponse, InferenceChunk } from '../types'
+import type { PendingRequest, InferenceResponse, InferenceChunk, InferenceRequest } from '../types'
 import { nodeSelector } from './selector'
 import { nodeRegistry } from '../registry/nodes'
+import { protocolHandler } from '../protocol/handler'
 import { randomUUID } from 'crypto'
 
 /**
@@ -37,7 +38,7 @@ export class LoadBalancer {
     const requestId = randomUUID()
 
     return new Promise((resolve, reject) => {
-      const request: PendingRequest = {
+      const pendingRequest: PendingRequest = {
         id: requestId,
         model,
         messages,
@@ -51,7 +52,28 @@ export class LoadBalancer {
         onChunk,
       }
 
-      this.pendingRequests.set(requestId, request)
+      this.pendingRequests.set(requestId, pendingRequest)
+
+      // Build the inference request to send to provider
+      const inferenceRequest: InferenceRequest = {
+        type: 'inference_request',
+        requestId,
+        model,
+        messages: messages as Array<{ role: 'system' | 'user' | 'assistant'; content: string }>,
+        temperature,
+        maxTokens,
+        stream,
+      }
+
+      // Send the request to the provider via WebSocket
+      const sent = protocolHandler.sendInferenceRequest(node.id, inferenceRequest)
+      if (!sent) {
+        this.pendingRequests.delete(requestId)
+        reject(new Error('Failed to send request to provider'))
+        return
+      }
+
+      console.log(`[LoadBalancer] Request ${requestId} sent to node ${node.id}`)
 
       // Set timeout
       setTimeout(() => {
