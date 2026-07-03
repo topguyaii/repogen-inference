@@ -181,6 +181,17 @@ wss.on('connection', (ws) => {
   protocolHandler.handleConnection(ws)
 })
 
+// Ping all connected clients every 25 seconds to keep connections alive
+// (Render/Cloudflare typically timeout idle connections at 60s)
+const PING_INTERVAL = 25000
+setInterval(() => {
+  wss.clients.forEach((ws) => {
+    if (ws.readyState === ws.OPEN) {
+      ws.ping()
+    }
+  })
+}, PING_INTERVAL)
+
 // Handle WebSocket upgrade requests
 server.on('upgrade', (request: IncomingMessage, socket: Duplex, head: Buffer) => {
   const pathname = new URL(request.url || '/', `http://${request.headers.host}`).pathname
