@@ -1,8 +1,12 @@
 import type { PendingRequest, InferenceResponse, InferenceChunk, InferenceRequest } from '../types'
 import { nodeSelector } from './selector'
 import { nodeRegistry } from '../registry/nodes'
-import { protocolHandler } from '../protocol/handler'
 import { randomUUID } from 'crypto'
+
+// Lazy import to avoid circular dependency
+function getProtocolHandler(): typeof import('../protocol/handler').protocolHandler {
+  return require('../protocol/handler').protocolHandler
+}
 
 /**
  * Load Balancer - Manages request queue and distribution
@@ -66,7 +70,7 @@ export class LoadBalancer {
       }
 
       // Send the request to the provider via WebSocket
-      const sent = protocolHandler.sendInferenceRequest(node.id, inferenceRequest)
+      const sent = getProtocolHandler().sendInferenceRequest(node.id, inferenceRequest)
       if (!sent) {
         this.pendingRequests.delete(requestId)
         reject(new Error('Failed to send request to provider'))
