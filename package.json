@@ -1,7 +1,6 @@
 {
   "name": "repogen-coordinator",
   "version": "0.1.0",
-  "type": "module",
   "scripts": {
     "dev": "npx tsx watch src/index.ts",
     "build": "npx tsc",

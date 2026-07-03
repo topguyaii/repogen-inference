@@ -1,8 +1,8 @@
-import { serve } from '@hono/node-server'
 import { Hono } from 'hono'
 import { cors } from 'hono/cors'
 import { WebSocketServer } from 'ws'
-import { createServer } from 'http'
+import { createServer, IncomingMessage } from 'http'
+import { Duplex } from 'stream'
 
 import { nodeRegistry } from './registry/nodes'
 import { modelRegistry } from './registry/models'
@@ -132,41 +132,86 @@ app.post('/internal/inference', async (c) => {
   }
 })
 
-// Start server
-const PORT = parseInt(process.env.COORDINATOR_PORT || '3002')
-const WS_PORT = parseInt(process.env.COORDINATOR_WS_PORT || '3003')
+// Use PORT from environment (Render sets this)
+const PORT = parseInt(process.env.PORT || process.env.COORDINATOR_PORT || '3002')
 
-// Create HTTP server for WebSocket
-const wsHttpServer = createServer()
-const wss = new WebSocketServer({ server: wsHttpServer })
+// Create HTTP server that handles both HTTP and WebSocket
+const server = createServer(async (req, res) => {
+  // Convert Node request/response to fetch API format for Hono
+  const url = new URL(req.url || '/', `http://${req.headers.host}`)
+
+  const headers = new Headers()
+  for (const [key, value] of Object.entries(req.headers)) {
+    if (value) {
+      headers.set(key, Array.isArray(value) ? value.join(', ') : value)
+    }
+  }
+
+  // Read body for POST requests
+  let body: string | undefined
+  if (req.method === 'POST' || req.method === 'PUT' || req.method === 'PATCH') {
+    body = await new Promise<string>((resolve) => {
+      let data = ''
+      req.on('data', (chunk) => (data += chunk))
+      req.on('end', () => resolve(data))
+    })
+  }
+
+  const request = new Request(url.toString(), {
+    method: req.method,
+    headers,
+    body: body,
+  })
+
+  const response = await app.fetch(request)
+
+  res.statusCode = response.status
+  response.headers.forEach((value, key) => {
+    res.setHeader(key, value)
+  })
+
+  const responseBody = await response.text()
+  res.end(responseBody)
+})
+
+// Create WebSocket server attached to the same HTTP server
+const wss = new WebSocketServer({ noServer: true })
 
 wss.on('connection', (ws) => {
   protocolHandler.handleConnection(ws)
 })
 
+// Handle WebSocket upgrade requests
+server.on('upgrade', (request: IncomingMessage, socket: Duplex, head: Buffer) => {
+  const pathname = new URL(request.url || '/', `http://${request.headers.host}`).pathname
+
+  // Only upgrade /ws path to WebSocket
+  if (pathname === '/ws') {
+    wss.handleUpgrade(request, socket, head, (ws) => {
+      wss.emit('connection', ws, request)
+    })
+  } else {
+    socket.destroy()
+  }
+})
+
 // Start health monitor
 healthMonitor.start()
 
-// Start HTTP API server
-serve({
-  fetch: app.fetch,
-  port: PORT,
+// Start the combined server
+server.listen(PORT, () => {
+  console.log(`[Coordinator] Server running on port ${PORT}`)
+  console.log(`[Coordinator] HTTP API: http://localhost:${PORT}`)
+  console.log(`[Coordinator] WebSocket: ws://localhost:${PORT}/ws`)
+  console.log('[Coordinator] Ready to accept node connections')
 })
-
-console.log(`[Coordinator] HTTP API running on port ${PORT}`)
-
-// Start WebSocket server
-wsHttpServer.listen(WS_PORT, () => {
-  console.log(`[Coordinator] WebSocket server running on port ${WS_PORT}`)
-})
-
-console.log('[Coordinator] Ready to accept node connections')
 
 // Graceful shutdown
 process.on('SIGINT', () => {
   console.log('\n[Coordinator] Shutting down...')
   healthMonitor.stop()
   wss.close()
+  server.close()
   process.exit(0)
 })
 
